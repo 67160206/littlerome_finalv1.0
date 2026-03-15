@@ -10,10 +10,6 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 import datetime
-from zoneinfo import ZoneInfo
-
-TZ_TH = ZoneInfo('Asia/Bangkok')
-def now_th(): return datetime.datetime.now(TZ_TH)
 import os
 import io
 import time
@@ -228,24 +224,24 @@ summary { color: var(--text) !important; font-weight: 600 !important; padding: 1
   content:''; position:absolute; top:0;left:0;right:0; height:2px;
   background: var(--kpi-accent, var(--blue));
 }
-.kpi-label { font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px; }
+.kpi-label { font-size:13px;font-weight:700;color:var(--text2);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px; }
 .kpi-val   { font-size:30px;font-weight:800;font-family:var(--mono); }
-.kpi-sub   { font-size:11px;color:var(--text2);margin-top:4px; }
+.kpi-sub   { font-size:13px;color:var(--text2);margin-top:4px; }
 .kpi-icon  { position:absolute;right:16px;top:50%;transform:translateY(-50%);opacity:.12;font-size:42px; }
 
 .card {
   background: var(--bg2); border: 1px solid var(--border);
-  border-radius: var(--r); padding: 20px;
+  border-radius: var(--r); padding: 12px 16px;
 }
 .card-title {
-  font-size: 13px; font-weight: 700; letter-spacing: .3px;
+  font-size: 15px; font-weight: 700; letter-spacing: .3px;
   color: var(--text); margin-bottom: 16px;
   display: flex; align-items: center; gap: 8px;
 }
 .card-row {
   display:flex;align-items:center;justify-content:space-between;
   padding: 8px 0; border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 15px;
 }
 .card-row:last-child { border-bottom: none; }
 
@@ -266,21 +262,21 @@ summary { color: var(--text) !important; font-weight: 600 !important; padding: 1
   border-radius: var(--rs); padding: 10px 14px; margin-bottom: 8px;
 }
 .det-item-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:4px; }
-.det-name  { font-size:13px; font-weight:700; }
-.det-conf  { font-family:var(--mono); font-size:12px; color:var(--text2); }
+.det-name  { font-size:15px; font-weight:700; }
+.det-conf  { font-family:var(--mono); font-size:14px; color:var(--text2); }
 .conf-bar  { height:3px; background:var(--border); border-radius:2px; }
 .conf-fill { height:100%; border-radius:2px; }
 
 .sys-row {
   display:flex;align-items:center;justify-content:space-between;
-  padding:10px 0; border-bottom:1px solid var(--border); font-size:13px;
+  padding:10px 0; border-bottom:1px solid var(--border); font-size:15px;
 }
 .sys-row:last-child { border:none; }
 .sdot { width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px; }
 
 .empty-state { text-align:center;padding:48px 20px;color:var(--text3); }
 .empty-icon  { font-size:40px;margin-bottom:12px;opacity:.4; }
-.empty-text  { font-size:14px;color:var(--text2); }
+.empty-text  { font-size:16px;color:var(--text2); }
 .empty-sub   { font-size:12px;margin-top:4px;color:var(--text3); }
 
 .hist-row {
@@ -522,7 +518,7 @@ def save_to_history(source: str, img_pil: Image.Image | None, detections: list):
     st.session_state.history.insert(
         0,
         {
-            "ts":         now_th().strftime("%Y-%m-%d %H:%M:%S"),
+            "ts":         datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "source":     source,
             "status":     "FAULT" if has_fault else "OK",
             "detections": detections,
@@ -536,7 +532,7 @@ def save_to_history(source: str, img_pil: Image.Image | None, detections: list):
 # ───────────────────────────────────────────────────────────────
 # HEADER
 # ───────────────────────────────────────────────────────────────
-now_str = now_th().strftime("%H:%M:%S · %d %b %Y")
+now_str = datetime.datetime.now().strftime("%H:%M:%S · %d %b %Y")
 _active_model_label = f"{len(_ensemble)}/6 models"
 st.markdown(
     f"""
@@ -620,8 +616,7 @@ with tab_dash:
 
     # Defect breakdown
     with col_a:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">📈 Defect Breakdown</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">📈 Defect Breakdown</div></div>', unsafe_allow_html=True)
         if defect_cnt:
             for cls_name, count in defect_cnt.most_common():
                 color = class_color(cls_name)
@@ -647,11 +642,27 @@ with tab_dash:
                 '<div class="empty-text">No defects recorded yet</div></div>',
                 unsafe_allow_html=True,
             )
-        st.markdown("</div>", unsafe_allow_html=True)
 
     # System status
     with col_b:
         model_status = ("🟢", "Online", "var(--green)") if model_ok else ("🔴", "Not Loaded", "var(--red)")
+
+        # Build model rows — one per loaded ensemble model
+        _model_info_rows = ""
+        for cls_name, keywords in PIPELINE_MODELS.items():
+            p = _find_model_file(keywords)
+            loaded = cls_name in _ensemble
+            dot   = "🟢" if loaded else "🔴"
+            fname = os.path.basename(p) if p else "ไม่พบไฟล์"
+            col   = class_color(cls_name)
+            emoji = class_emoji(cls_name)
+            _model_info_rows += (
+                f'<div class="sys-row">' 
+                f'<span style="color:{col}">{emoji} {cls_name}</span>' 
+                f'<span class="text-mono" style="font-size:11px;color:var(--text2)">{dot} {fname}</span>' 
+                f'</div>'
+            )
+
         st.markdown(
             f"""
 <div class="card">
@@ -661,13 +672,10 @@ with tab_dash:
     <span class="text-mono" style="color:{model_status[2]};font-size:12px">{model_status[0]} {model_status[1]}</span>
   </div>
   <div class="sys-row">
-    <span>Model File</span>
-    <span class="text-mono" style="font-size:11px;color:var(--text2)">best.pt</span>
+    <span>Models Loaded</span>
+    <span class="text-mono" style="font-size:12px;color:var(--blue)">{len(_ensemble)}/6</span>
   </div>
-  <div class="sys-row">
-    <span>Detection Classes</span>
-    <span class="text-mono" style="font-size:11px;color:var(--blue)">{len(class_names)} classes</span>
-  </div>
+  {_model_info_rows}
   <div class="sys-row">
     <span>Confidence Threshold</span>
     <span class="text-mono" style="font-size:12px;color:var(--orange)">{int(st.session_state.conf_threshold*100)}%</span>
@@ -685,7 +693,6 @@ with tab_dash:
 
     # Recent inspections
     st.markdown("<div style='margin-top:16px'>", unsafe_allow_html=True)
-    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown(
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">'
         '<div class="card-title" style="margin-bottom:0">📋 Recent Inspections</div></div>',
@@ -726,8 +733,7 @@ with tab_cam:
     col_cam, col_panel = st.columns([3, 1], gap="medium")
 
     with col_panel:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">⚙️ Camera Controls</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">⚙️ Camera Controls</div></div>', unsafe_allow_html=True)
         cam_conf = st.slider(
             "Confidence Threshold", 5, 95,
             int(st.session_state.conf_threshold * 100), 5,
@@ -737,14 +743,12 @@ with tab_cam:
 
         continuous = st.checkbox("🔄 Continuous Detection", value=st.session_state.cam_continuous, key="cam_cont_chk")
         st.session_state.cam_continuous = continuous
-        st.markdown("</div>", unsafe_allow_html=True)
 
         # Live detections panel (updated after inference)
         det_placeholder = st.empty()
 
         # Session stats
-        st.markdown('<div class="card mt-16">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">📊 Session Stats</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style="margin-top:16px;"><div class="card-title">📊 Session Stats</div></div>', unsafe_allow_html=True)
         cam_scans  = sum(1 for h in st.session_state.history if h["source"] == "Camera")
         cam_faults = sum(1 for h in st.session_state.history if h["source"] == "Camera" and h["status"] == "FAULT")
         cam_pr     = round((cam_scans - cam_faults) / cam_scans * 100) if cam_scans > 0 else 100
@@ -757,7 +761,6 @@ with tab_cam:
 """,
             unsafe_allow_html=True,
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_cam:
         st.markdown(
@@ -847,8 +850,7 @@ with tab_img:
     col_upload, col_result = st.columns(2, gap="medium")
 
     with col_upload:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">📤 Upload</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">📤 Upload</div></div>', unsafe_allow_html=True)
         img_conf = st.slider(
             "Confidence Threshold", 5, 95,
             int(st.session_state.conf_threshold * 100), 5,
@@ -869,11 +871,9 @@ with tab_img:
             width='stretch',
             key="img_analyze_btn",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_result:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">👁 Detection Result</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">👁 Detection Result</div></div>', unsafe_allow_html=True)
 
         if analyze_btn and uploaded:
             img_pil = Image.open(uploaded).convert("RGB")
@@ -928,7 +928,7 @@ with tab_img:
             st.download_button(
                 "⬇️  Download Annotated Image",
                 data=buf.getvalue(),
-                file_name=f"lv_result_{now_th().strftime('%Y%m%d_%H%M%S')}.png",
+                file_name=f"lv_result_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
                 mime="image/png",
                 width='stretch',
             )
@@ -939,7 +939,6 @@ with tab_img:
                 '<div class="empty-text">Upload an image to begin</div></div>',
                 unsafe_allow_html=True,
             )
-        st.markdown("</div>", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
 # TAB 4 — UPLOAD VIDEO
@@ -953,8 +952,7 @@ with tab_vid:
     col_vup, col_vres = st.columns(2, gap="medium")
 
     with col_vup:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">📤 Upload Video</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">📤 Upload Video</div></div>', unsafe_allow_html=True)
         vid_conf     = st.slider("Confidence", 10, 95, 50, 5, format="%d%%", key="vid_conf")
         max_frames   = st.select_slider(
             "Frames to Analyze",
@@ -974,11 +972,9 @@ with tab_vid:
             width='stretch',
             key="vid_process_btn",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_vres:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">📊 Video Analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">📊 Video Analysis</div></div>', unsafe_allow_html=True)
 
         if process_btn and vid_file:
             # Write to temp file
@@ -1094,7 +1090,6 @@ with tab_vid:
                 '<div class="empty-sub">Frames will be analyzed across the full duration</div></div>',
                 unsafe_allow_html=True,
             )
-        st.markdown("</div>", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
 # TAB 5 — HISTORY
@@ -1114,7 +1109,6 @@ with tab_hist:
             st.session_state.total_faults = 0
             st.rerun()
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
 
     if st.session_state.history:
         # ── HTML table (dark-theme safe) ──
@@ -1122,7 +1116,7 @@ with tab_hist:
 <style>
 .hist-table { width:100%; border-collapse:collapse; font-size:13px; }
 .hist-table th {
-  font-size:11px; font-weight:700; color:var(--text2);
+  font-size:13px; font-weight:700; color:var(--text2);
   letter-spacing:.5px; text-transform:uppercase;
   padding:10px 14px; border-bottom:1px solid var(--border);
   text-align:left; background:var(--bg2);
@@ -1172,7 +1166,7 @@ with tab_hist:
         st.download_button(
             "⬇️  Export CSV",
             data=csv_buf,
-            file_name=f"lv_history_{now_th().strftime('%Y%m%d_%H%M%S')}.csv",
+            file_name=f"lv_history_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
             key="hist_export",
         )
@@ -1184,7 +1178,6 @@ with tab_hist:
             unsafe_allow_html=True,
         )
 
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
 # TAB 6 — SETTINGS
@@ -1198,8 +1191,7 @@ with tab_settings:
     col_s1, col_s2 = st.columns(2, gap="medium")
 
     with col_s1:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🤖 AI Configuration</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">🤖 AI Configuration</div></div>', unsafe_allow_html=True)
         new_conf = st.slider(
             "Global Confidence Threshold",
             5, 95,
@@ -1225,10 +1217,8 @@ with tab_settings:
                 '<div style="font-size:12px;color:var(--text3)">No class names loaded — check best.pt</div>',
                 unsafe_allow_html=True,
             )
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="card mt-16">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🧠 Ensemble Models (5 ตัว)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style="margin-top:16px;"><div class="card-title">🧠 Ensemble Models (6 ตัว)</div></div>', unsafe_allow_html=True)
         _model_rows = ""
         for cls_name in PIPELINE_MODELS.keys():
             loaded = cls_name in _ensemble
@@ -1243,10 +1233,8 @@ with tab_settings:
                 f'<span class="text-mono" style="color:{dot_color};font-size:12px">● {status}</span></div>'
             )
         st.markdown(_model_rows, unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="card mt-16">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">ℹ️ Model Info</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style="margin-top:16px;"><div class="card-title">ℹ️ Model Info</div></div>', unsafe_allow_html=True)
         active_label = f"{len(_ensemble)}/6 models loaded"
         st.markdown(
             f'''
@@ -1256,11 +1244,9 @@ with tab_settings:
 ''',
             unsafe_allow_html=True,
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_s2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🔔 Alerts & Behaviour</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style=""><div class="card-title">🔔 Alerts & Behaviour</div></div>', unsafe_allow_html=True)
 
         alert_en = st.toggle(
             "Fault Alert Banner",
@@ -1278,10 +1264,8 @@ with tab_settings:
         )
         st.session_state.autosave = autosave
 
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="card mt-16">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🗄️ Data Management</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card" style="margin-top:16px;"><div class="card-title">🗄️ Data Management</div></div>', unsafe_allow_html=True)
 
         col_r1, col_r2 = st.columns(2)
         with col_r1:
@@ -1306,17 +1290,14 @@ with tab_settings:
 """,
             unsafe_allow_html=True,
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="card mt-16">', unsafe_allow_html=True)
         st.markdown(
-            """
+            """<div class="card" style="margin-top:16px">
 <div class="card-title">👁 About</div>
-<div class="card-row"><span class="text-muted">App</span><span class="text-mono">Littlelome AI Vision</span></div>
+<div class="card-row"><span class="text-muted">App</span><span class="text-mono">Littlerome AI Vision</span></div>
 <div class="card-row"><span class="text-muted">Version</span><span class="text-mono">1.0.0</span></div>
 <div class="card-row"><span class="text-muted">Engine</span><span class="text-mono">YOLOv11 · Ultralytics</span></div>
 <div class="card-row" style="border:none"><span class="text-muted">Framework</span><span class="text-mono">Streamlit</span></div>
-""",
+</div>""",
             unsafe_allow_html=True,
         )
-        st.markdown("</div>", unsafe_allow_html=True)
