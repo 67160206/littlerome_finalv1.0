@@ -10,6 +10,9 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 import datetime
+from zoneinfo import ZoneInfo
+TZ_TH = ZoneInfo('Asia/Bangkok')
+def now_th(): return datetime.datetime.now(TZ_TH)
 import os
 import io
 import time
@@ -321,16 +324,329 @@ except AttributeError:
     st.markdown(_CSS_INJECT, unsafe_allow_html=True)
 
 # ───────────────────────────────────────────────────────────────
+# GOOGLE SHEETS — persistent storage
+# ───────────────────────────────────────────────────────────────
+import json as _json
+import hashlib as _hashlib
+import gspread
+from google.oauth2.service_account import Credentials as _Creds
+
+_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+@st.cache_resource(show_spinner=False)
+def _get_sheet_client():
+    """Return authorised gspread client (cached across reruns)."""
+    try:
+        creds = _Creds.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]), scopes=_SCOPES
+        )
+        return gspread.authorize(creds)
+    except Exception as e:
+        return None
+
+@st.cache_resource(show_spinner=False)
+def _get_workbook():
+    """Open the spreadsheet by ID from secrets."""
+    gc = _get_sheet_client()
+    if gc is None:
+        return None
+    try:
+        return gc.open_by_key(st.secrets["gsheets"]["sheet_id"])
+    except Exception:
+        return None
+
+def _get_or_create_sheet(name: str, headers: list):
+    """Return worksheet, creating it with headers if it doesn't exist."""
+    wb = _get_workbook()
+    if wb is None:
+        return None
+    try:
+        ws = wb.worksheet(name)
+    except gspread.WorksheetNotFound:
+        ws = wb.add_worksheet(title=name, rows=1000, cols=len(headers))
+        ws.append_row(headers)
+    return ws
+
+# ── History helpers ─────────────────────────────────────────────
+def gs_load_history() -> list:
+    ws = _get_or_create_sheet(
+        "History",
+        ["Timestamp", "User", "Source", "Status", "Detections", "Avg Conf %"],
+    )
+    if ws is None:
+        return []
+    try:
+        rows = ws.get_all_records()
+        result = []
+        for r in rows:
+            dets_raw = r.get("Detections", "")
+            try:
+                dets = _json.loads(dets_raw) if dets_raw else []
+            except Exception:
+                dets = []
+            result.append({
+                "ts":         r.get("Timestamp", ""),
+                "user":       r.get("User", ""),
+                "source":     r.get("Source", ""),
+                "status":     r.get("Status", "OK"),
+                "detections": dets,
+                "thumbnail":  None,
+            })
+        return list(reversed(result))   # newest first
+    except Exception:
+        return []
+
+def gs_append_history(entry: dict):
+    ws = _get_or_create_sheet(
+        "History",
+        ["Timestamp", "User", "Source", "Status", "Detections", "Avg Conf %"],
+    )
+    if ws is None:
+        return
+    try:
+        dets = entry.get("detections", [])
+        det_str = ", ".join(d["class"] for d in dets[:3]) or "—"
+        avg_c = round(
+            sum(d["confidence"] for d in dets) / len(dets), 1
+        ) if dets else 0
+        ws.append_row([
+            entry.get("ts", ""),
+            entry.get("user", ""),
+            entry.get("source", ""),
+            entry.get("status", "OK"),
+            _json.dumps([{k: v for k, v in d.items() if k not in ("color","emoji","fault")} for d in dets], ensure_ascii=False),
+            avg_c,
+        ])
+    except Exception:
+        pass
+
+def gs_clear_history():
+    ws = _get_or_create_sheet(
+        "History",
+        ["Timestamp", "User", "Source", "Status", "Detections", "Avg Conf %"],
+    )
+    if ws is None:
+        return
+    try:
+        ws.clear()
+        ws.append_row(["Timestamp", "User", "Source", "Status", "Detections", "Avg Conf %"])
+    except Exception:
+        pass
+
+# ── Users helpers ────────────────────────────────────────────────
+_DEFAULT_USERS = {
+    "admin":    {"password": _hashlib.sha256("admin1234".encode()).hexdigest(), "display_name": "Administrator", "role": "admin"},
+    "operator": {"password": _hashlib.sha256("op1234".encode()).hexdigest(),    "display_name": "Operator",      "role": "operator"},
+    "viewer":   {"password": _hashlib.sha256("view1234".encode()).hexdigest(),  "display_name": "Viewer",        "role": "viewer"},
+}
+
+def gs_load_users() -> dict:
+    ws = _get_or_create_sheet("Users", ["Username", "Password", "DisplayName", "Role"])
+    if ws is None:
+        return _DEFAULT_USERS.copy()
+    try:
+        rows = ws.get_all_records()
+        if not rows:
+            # Seed defaults
+            for uname, data in _DEFAULT_USERS.items():
+                ws.append_row([uname, data["password"], data["display_name"], data["role"]])
+            return _DEFAULT_USERS.copy()
+        return {
+            r["Username"]: {
+                "password":     r["Password"],
+                "display_name": r["DisplayName"],
+                "role":         r["Role"],
+            }
+            for r in rows if r.get("Username")
+        }
+    except Exception:
+        return _DEFAULT_USERS.copy()
+
+def gs_save_user(username: str, pw_hash: str, display_name: str, role: str):
+    ws = _get_or_create_sheet("Users", ["Username", "Password", "DisplayName", "Role"])
+    if ws is None:
+        return False
+    try:
+        rows = ws.get_all_values()
+        for i, row in enumerate(rows[1:], start=2):   # skip header
+            if row and row[0] == username:
+                ws.update(f"A{i}:D{i}", [[username, pw_hash, display_name, role]])
+                return True
+        ws.append_row([username, pw_hash, display_name, role])
+        return True
+    except Exception:
+        return False
+
+def gs_delete_user(username: str):
+    ws = _get_or_create_sheet("Users", ["Username", "Password", "DisplayName", "Role"])
+    if ws is None:
+        return False
+    try:
+        rows = ws.get_all_values()
+        for i, row in enumerate(rows[1:], start=2):
+            if row and row[0] == username:
+                ws.delete_rows(i)
+                return True
+        return False
+    except Exception:
+        return False
+
+def gs_save_user_compat(users_dict: dict) -> bool:
+    """Compatibility shim: saves entire users dict back to GSheets."""
+    ws = _get_or_create_sheet("Users", ["Username", "Password", "DisplayName", "Role"])
+    if ws is None:
+        return False
+    try:
+        ws.clear()
+        ws.append_row(["Username", "Password", "DisplayName", "Role"])
+        for uname, data in users_dict.items():
+            ws.append_row([uname, data["password"], data["display_name"], data["role"]])
+        return True
+    except Exception:
+        return False
+
+def hash_pw(pw: str) -> str:
+    return _hashlib.sha256(pw.encode()).hexdigest()
+
+def verify_pw(pw: str, hashed: str) -> bool:
+    return hash_pw(pw) == hashed
+
+# GSheets connection status (for header badge)
+_gs_ok = _get_workbook() is not None
+
+# ───────────────────────────────────────────────────────────────
+# LOGIN SCREEN
+# ───────────────────────────────────────────────────────────────
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in      = False
+    st.session_state.username       = ""
+    st.session_state.display_name   = ""
+    st.session_state.role           = ""
+    st.session_state.login_time     = None
+    st.session_state.activity_log   = []
+
+if not st.session_state.logged_in:
+    st.markdown("""
+<style>
+.login-logo { display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:8px; }
+.login-logo-icon { width:44px;height:44px;background:linear-gradient(135deg,#2188ff,#1a5fb4);
+  border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px; }
+.login-title { font-size:22px;font-weight:800; }
+</style>
+<div class="login-logo">
+  <div class="login-logo-icon">👁</div>
+  <div class="login-title">Littlerome<span style="color:#2188ff">AI</span> Vision</div>
+</div>
+<div style="font-size:12px;color:var(--text2);text-align:center;margin-bottom:24px">
+  กรุณาเข้าสู่ระบบหรือสมัครสมาชิก</div>
+""", unsafe_allow_html=True)
+
+    # Tab toggle for login / register
+    if "auth_tab" not in st.session_state:
+        st.session_state.auth_tab = "login"
+
+    _, col_c, _ = st.columns([1, 1.2, 1])
+    with col_c:
+        # Tab buttons
+        t1, t2 = st.columns(2)
+        with t1:
+            if st.button("🔐 เข้าสู่ระบบ", use_container_width=True, key="tab_login",
+                         type="primary" if st.session_state.auth_tab=="login" else "secondary"):
+                st.session_state.auth_tab = "login"
+                st.rerun()
+        with t2:
+            if st.button("✏️ สมัครสมาชิก", use_container_width=True, key="tab_reg",
+                         type="primary" if st.session_state.auth_tab=="register" else "secondary"):
+                st.session_state.auth_tab = "register"
+                st.rerun()
+
+        # ── LOGIN ──
+        if st.session_state.auth_tab == "login":
+            with st.container(border=True):
+                u_in = st.text_input("Username", placeholder="กรอก username", key="li_u")
+                p_in = st.text_input("Password", type="password", placeholder="กรอก password", key="li_p")
+                if st.button("เข้าสู่ระบบ", type="primary", use_container_width=True, key="li_btn"):
+                    _users = gs_load_users()
+                    if u_in in _users and verify_pw(p_in, _users[u_in]["password"]):
+                        st.session_state.logged_in    = True
+                        st.session_state.username     = u_in
+                        st.session_state.display_name = _users[u_in]["display_name"]
+                        st.session_state.role         = _users[u_in]["role"]
+                        st.session_state.login_time   = now_th()
+                        st.session_state.activity_log = [{"ts": now_th().strftime("%H:%M:%S"), "user": u_in, "action": "🔑 Login", "detail": f"เข้าสู่ระบบ ({_users[u_in]['role']})"}]
+                        st.rerun()
+                    else:
+                        st.error("❌ Username หรือ Password ไม่ถูกต้อง")
+
+        # ── REGISTER ──
+        else:
+            with st.container(border=True):
+                st.markdown("**สร้างบัญชีใหม่**")
+
+                # ── Get invite code from Streamlit Secrets ──
+                try:
+                    _invite_code = st.secrets["invite_code"]
+                except Exception:
+                    _invite_code = "LITTLEROME2025"   # fallback default
+
+                reg_uname  = st.text_input("Username", placeholder="ตัวอักษร/ตัวเลข ไม่มีช่องว่าง", key="reg_u")
+                reg_dname  = st.text_input("Display Name", placeholder="ชื่อที่แสดงในระบบ", key="reg_d")
+                reg_pw     = st.text_input("Password", type="password", placeholder="อย่างน้อย 6 ตัวอักษร", key="reg_p")
+                reg_pw2    = st.text_input("ยืนยัน Password", type="password", key="reg_p2")
+                reg_invite = st.text_input("🔑 Invite Code", placeholder="กรอกรหัสเชิญ", key="reg_inv")
+
+                if st.button("✅ สมัครสมาชิก", type="primary", use_container_width=True, key="reg_btn"):
+                    _users = gs_load_users()
+                    if not reg_uname or not reg_dname or not reg_pw or not reg_invite:
+                        st.error("❌ กรุณากรอกข้อมูลให้ครบทุกช่อง")
+                    elif reg_invite.strip() != _invite_code.strip():
+                        st.error("❌ Invite Code ไม่ถูกต้อง — กรุณาติดต่อ Admin")
+                    elif " " in reg_uname:
+                        st.error("❌ Username ต้องไม่มีช่องว่าง")
+                    elif len(reg_pw) < 6:
+                        st.error("❌ Password ต้องมีอย่างน้อย 6 ตัวอักษร")
+                    elif reg_pw != reg_pw2:
+                        st.error("❌ Password ไม่ตรงกัน")
+                    elif reg_uname in _users:
+                        st.error(f"❌ Username '{reg_uname}' มีอยู่แล้ว")
+                    else:
+                        ok = gs_save_user(reg_uname, hash_pw(reg_pw), reg_dname, "operator")
+                        if ok:
+                            st.success(f"✅ สมัครสมาชิกสำเร็จ! เข้าสู่ระบบได้เลย @{reg_uname}")
+                            st.session_state.auth_tab = "login"
+                            st.rerun()
+                        else:
+                            st.error("❌ บันทึกไม่ได้ — ตรวจสอบ Google Sheets connection")
+
+                st.markdown(
+                    '<div style="font-size:11px;color:var(--text3);margin-top:8px">'
+                    'ℹ️ ต้องมี Invite Code จาก Admin · Role เริ่มต้น: <b>operator</b></div>',
+                    unsafe_allow_html=True,
+                )
+    st.stop()
+
+# ───────────────────────────────────────────────────────────────
 # SESSION STATE
 # ───────────────────────────────────────────────────────────────
+# Load history from Google Sheets on first run of this session
+if "gs_history_loaded" not in st.session_state:
+    st.session_state.gs_history_loaded = True
+    _loaded = gs_load_history()
+    st.session_state.history      = _loaded
+    st.session_state.total_scans  = len(_loaded)
+    st.session_state.total_faults = sum(1 for h in _loaded if h.get("status") == "FAULT")
+
 defaults = {
-    "history": [],
-    "total_scans": 0,
-    "total_faults": 0,
-    "conf_threshold": 0.15,
-    "alert_enabled": True,
-    "autosave": True,
-    "cam_continuous": False,
+    "history":            [],
+    "total_scans":        0,
+    "total_faults":       0,
+    "conf_threshold":     0.15,
+    "alert_enabled":      True,
+    "autosave":           True,
+    "cam_continuous":     False,
     "settings_threshold": 15,
 }
 for k, v in defaults.items():
@@ -515,19 +831,20 @@ def save_to_history(source: str, img_pil: Image.Image | None, detections: list):
         thumb = img_pil.copy()
         thumb.thumbnail((120, 90))
     has_fault = any(d["fault"] for d in detections)
-    st.session_state.history.insert(
-        0,
-        {
-            "ts":         datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source":     source,
-            "status":     "FAULT" if has_fault else "OK",
-            "detections": detections,
-            "thumbnail":  thumb,
-        },
-    )
+    entry = {
+        "ts":         now_th().strftime("%Y-%m-%d %H:%M:%S"),
+        "user":       st.session_state.get("username", "—"),
+        "source":     source,
+        "status":     "FAULT" if has_fault else "OK",
+        "detections": detections,
+        "thumbnail":  thumb,
+    }
+    st.session_state.history.insert(0, entry)
     st.session_state.total_scans += 1
     if has_fault:
         st.session_state.total_faults += 1
+    # Write to Google Sheets (background, non-blocking)
+    gs_append_history(entry)
 
 # ───────────────────────────────────────────────────────────────
 # HEADER
@@ -545,6 +862,7 @@ st.markdown(
     <div class="lv-conn">
       <div class="lv-dot"></div> CONNECTED
     </div>
+    <div style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;color:{"var(--green)" if _gs_ok else "var(--red)"}">{"🟢 Google Sheets" if _gs_ok else "🔴 Sheets offline"}</div>
   </div>
   <div style="display:flex;align-items:center;gap:12px">
     <span class="lv-time">{now_str}</span>
@@ -727,102 +1045,125 @@ with tab_dash:
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
-# TAB 2 — LIVE CAMERA
+# TAB 2 — LIVE CAMERA + VIDEO RECORDING
 # ═══════════════════════════════════════════════════════════════
 with tab_cam:
+    if "rec_frames"   not in st.session_state: st.session_state.rec_frames   = []
+    if "rec_running"  not in st.session_state: st.session_state.rec_running  = False
+    if "rec_all_dets" not in st.session_state: st.session_state.rec_all_dets = []
+
     col_cam, col_panel = st.columns([3, 1], gap="medium")
 
     with col_panel:
-        st.markdown('<div class="card" style=""><div class="card-title">⚙️ Camera Controls</div></div>', unsafe_allow_html=True)
-        cam_conf = st.slider(
-            "Confidence Threshold", 5, 95,
-            int(st.session_state.conf_threshold * 100), 5,
-            format="%d%%", key="cam_conf_slider",
-        )
-        st.session_state.conf_threshold = cam_conf / 100
+        with st.container(border=True):
+            st.markdown('<div class="card-title">⚙️ Camera Controls</div>', unsafe_allow_html=True)
+            cam_conf = st.slider(
+                "Confidence Threshold", 5, 95,
+                int(st.session_state.conf_threshold * 100), 5,
+                format="%d%%", key="cam_conf_slider",
+            )
+            st.session_state.conf_threshold = cam_conf / 100
+            continuous = st.checkbox("🔄 Continuous", value=st.session_state.cam_continuous, key="cam_cont_chk")
+            st.session_state.cam_continuous = continuous
 
-        continuous = st.checkbox("🔄 Continuous Detection", value=st.session_state.cam_continuous, key="cam_cont_chk")
-        st.session_state.cam_continuous = continuous
+        with st.container(border=True):
+            st.markdown('<div class="card-title">🎬 บันทึกวิดีโอ</div>', unsafe_allow_html=True)
+            fps_sel = st.select_slider("FPS", options=[1, 2, 5, 10, 15], value=5, key="rec_fps")
+            rb1, rb2 = st.columns(2)
+            with rb1:
+                if st.button(
+                    "⏺ เริ่ม", type="primary",
+                    use_container_width=True, key="rec_start",
+                    disabled=st.session_state.rec_running,
+                ):
+                    st.session_state.rec_frames   = []
+                    st.session_state.rec_all_dets = []
+                    st.session_state.rec_running  = True
+                    st.rerun()
+            with rb2:
+                if st.button(
+                    "⏹ หยุด",
+                    use_container_width=True, key="rec_stop",
+                    disabled=not st.session_state.rec_running,
+                ):
+                    st.session_state.rec_running = False
+                    st.rerun()
 
-        # Live detections panel (updated after inference)
+            if st.session_state.rec_running:
+                st.markdown(
+                    f'<div style="color:var(--red);font-weight:700;font-size:13px">'
+                    f'🔴 กำลังบันทึก — {len(st.session_state.rec_frames)} frames</div>',
+                    unsafe_allow_html=True,
+                )
+            elif st.session_state.rec_frames:
+                st.markdown(
+                    f'<div style="color:var(--green);font-size:13px">'
+                    f'✅ {len(st.session_state.rec_frames)} frames บันทึกแล้ว</div>',
+                    unsafe_allow_html=True,
+                )
+
         det_placeholder = st.empty()
 
-        # Session stats
-        st.markdown('<div class="card" style="margin-top:16px;"><div class="card-title">📊 Session Stats</div></div>', unsafe_allow_html=True)
-        cam_scans  = sum(1 for h in st.session_state.history if h["source"] == "Camera")
-        cam_faults = sum(1 for h in st.session_state.history if h["source"] == "Camera" and h["status"] == "FAULT")
-        cam_pr     = round((cam_scans - cam_faults) / cam_scans * 100) if cam_scans > 0 else 100
-        st.markdown(
-            f"""
+        with st.container(border=True):
+            st.markdown('<div class="card-title">📊 Session Stats</div>', unsafe_allow_html=True)
+            cam_scans  = sum(1 for h in st.session_state.history if h["source"] in ("Camera", "Camera Record"))
+            cam_faults = sum(1 for h in st.session_state.history if h["source"] in ("Camera", "Camera Record") and h["status"] == "FAULT")
+            cam_pr     = round((cam_scans - cam_faults) / cam_scans * 100) if cam_scans > 0 else 100
+            st.markdown(
+                f"""
 <div class="card-row"><span class="text-muted">Scanned</span><span class="text-mono">{cam_scans}</span></div>
 <div class="card-row"><span class="text-muted">Faults</span><span class="text-mono text-red">{cam_faults}</span></div>
 <div class="card-row" style="border:none"><span class="text-muted">Pass Rate</span>
   <span class="text-mono text-green">{cam_pr}%</span></div>
 """,
-            unsafe_allow_html=True,
-        )
+                unsafe_allow_html=True,
+            )
 
     with col_cam:
         st.markdown(
             '<div style="font-size:22px;font-weight:800;margin-bottom:4px">📷 Live Camera</div>'
-            '<div style="font-size:13px;color:var(--text2);margin-bottom:16px">Real-time defect detection via webcam</div>',
+            '<div style="font-size:13px;color:var(--text2);margin-bottom:16px">'
+            'ถ่ายภาพเดี่ยว หรือกด ⏺ เริ่ม เพื่ออัดวิดีโอพร้อม detect ทุก frame</div>',
             unsafe_allow_html=True,
         )
 
-        cam_frame = st.camera_input(
-            "Camera Feed — capture a frame for instant detection",
-            key="cam_input",
-            label_visibility="collapsed",
-        )
-
+        cam_frame = st.camera_input("Camera", key="cam_input", label_visibility="collapsed")
         result_placeholder = st.empty()
 
         if cam_frame is not None:
             img_pil = Image.open(cam_frame).convert("RGB")
-            with st.spinner("🔍 Analyzing frame…"):
+            with st.spinner("🔍 Analyzing…"):
                 annotated, detections = run_inference(img_pil, conf=st.session_state.conf_threshold)
 
-            result_placeholder.image(annotated, width='stretch', caption="Detection Result")
-
+            result_placeholder.image(annotated, use_container_width=True, caption="Detection Result")
             has_fault = any(d["fault"] for d in detections)
 
-            # Alert banner
             if has_fault and st.session_state.alert_enabled:
                 fault_names = ", ".join(d["class"] for d in detections if d["fault"])
                 st.markdown(
-                    f"""<div class="alert-box">
-  <div class="alert-icon">🚨</div>
-  <div>
-    <div style="font-weight:800;font-size:16px;color:var(--red)">FAULT DETECTED</div>
-    <div style="font-size:13px;color:var(--text2);margin-top:2px">{fault_names}</div>
-  </div>
-</div>""",
+                    f'<div class="alert-box"><div class="alert-icon">🚨</div>'
+                    f'<div><div style="font-weight:800;font-size:16px;color:var(--red)">FAULT DETECTED</div>'
+                    f'<div style="font-size:13px;color:var(--text2)">{fault_names}</div></div></div>',
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
                     '<div style="background:var(--green-g);border:1px solid rgba(63,185,80,.3);'
                     'border-radius:var(--r);padding:12px 16px;color:var(--green);'
-                    'font-weight:700;font-size:14px;margin-bottom:8px">✅ No defects detected — Pipeline OK</div>',
+                    'font-weight:700;font-size:14px;margin-bottom:8px">✅ No defects — Pipeline OK</div>',
                     unsafe_allow_html=True,
                 )
 
-            # Detection list in panel
             if detections:
                 dets_html = '<div class="card"><div class="card-title">🎯 Live Detections</div>'
                 for d in detections:
                     pct = int(d["confidence"])
-                    dets_html += f"""
-<div class="det-item">
-  <div class="det-item-header">
-    <span class="det-name" style="color:{d['color']}">{d['emoji']} {d['class']}</span>
-    <span class="det-conf">{pct}%</span>
-  </div>
-  <div class="conf-bar">
-    <div class="conf-fill" style="width:{pct}%;background:{d['color']}"></div>
-  </div>
-</div>
-"""
+                    dets_html += (
+                        f'<div class="det-item"><div class="det-item-header">'
+                        f'<span class="det-name" style="color:{d["color"]}">{d["emoji"]} {d["class"]}</span>'
+                        f'<span class="det-conf">{pct}%</span></div>'
+                        f'<div class="conf-bar"><div class="conf-fill" style="width:{pct}%;background:{d["color"]}"></div></div></div>'
+                    )
                 dets_html += "</div>"
                 det_placeholder.markdown(dets_html, unsafe_allow_html=True)
             else:
@@ -832,11 +1173,69 @@ with tab_cam:
                     unsafe_allow_html=True,
                 )
 
-            save_to_history("Camera", img_pil, detections)
+            # Recording mode
+            if st.session_state.rec_running:
+                st.session_state.rec_frames.append(np.array(annotated))
+                st.session_state.rec_all_dets.extend(detections)
+                time.sleep(1.0 / fps_sel)
+                st.rerun()
+            else:
+                save_to_history("Camera", img_pil, detections)
 
-            if continuous:
+            if continuous and not st.session_state.rec_running:
                 time.sleep(0.5)
                 st.rerun()
+
+        # ── Export ──
+        if not st.session_state.rec_running and st.session_state.rec_frames:
+            st.markdown("---")
+            n = len(st.session_state.rec_frames)
+            st.markdown(f'<div style="font-size:15px;font-weight:700;margin-bottom:12px">🎬 วิดีโอที่บันทึก — {n} frames</div>', unsafe_allow_html=True)
+            cx1, cx2, cx3 = st.columns(3)
+
+            with cx1:
+                if st.button("⬇️ Export GIF", use_container_width=True, key="exp_gif"):
+                    with st.spinner("กำลังสร้าง GIF…"):
+                        gif_frames = [Image.fromarray(f) for f in st.session_state.rec_frames]
+                        gif_buf = io.BytesIO()
+                        gif_frames[0].save(
+                            gif_buf, format="GIF", save_all=True,
+                            append_images=gif_frames[1:],
+                            duration=int(1000 / fps_sel), loop=0,
+                        )
+                        st.download_button(
+                            "⬇️ ดาวน์โหลด GIF", data=gif_buf.getvalue(),
+                            file_name=f"record_{now_th().strftime('%Y%m%d_%H%M%S')}.gif",
+                            mime="image/gif", key="dl_gif", use_container_width=True,
+                        )
+
+            with cx2:
+                if st.button("⬇️ Export MP4", use_container_width=True, key="exp_mp4"):
+                    with st.spinner("กำลังสร้าง MP4…"):
+                        try:
+                            _tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                            _h, _w = st.session_state.rec_frames[0].shape[:2]
+                            _wr = cv2.VideoWriter(_tmp.name, cv2.VideoWriter_fourcc(*"mp4v"), fps_sel, (_w, _h))
+                            for _fr in st.session_state.rec_frames:
+                                _wr.write(cv2.cvtColor(_fr, cv2.COLOR_RGB2BGR))
+                            _wr.release()
+                            with open(_tmp.name, "rb") as vf:
+                                st.download_button(
+                                    "⬇️ ดาวน์โหลด MP4", data=vf.read(),
+                                    file_name=f"record_{now_th().strftime('%Y%m%d_%H%M%S')}.mp4",
+                                    mime="video/mp4", key="dl_mp4", use_container_width=True,
+                                )
+                            os.unlink(_tmp.name)
+                        except Exception as _e:
+                            st.error(f"Export MP4 ไม่ได้: {_e}")
+
+            with cx3:
+                if st.button("🗑 ล้าง", use_container_width=True, key="rec_clear"):
+                    st.session_state.rec_frames   = []
+                    st.session_state.rec_all_dets = []
+                    st.rerun()
+
+            save_to_history("Camera Record", None, st.session_state.rec_all_dets)
 
 # ═══════════════════════════════════════════════════════════════
 # TAB 3 — UPLOAD IMAGE
@@ -1103,10 +1502,12 @@ with tab_hist:
             unsafe_allow_html=True,
         )
     with col_hb:
-        if st.button("🗑  Clear History", key="clear_hist", width='stretch'):
-            st.session_state.history      = []
-            st.session_state.total_scans  = 0
-            st.session_state.total_faults = 0
+        if st.button("🗑  Clear History", key="clear_hist", use_container_width=True):
+            gs_clear_history()
+            st.session_state.history            = []
+            st.session_state.total_scans        = 0
+            st.session_state.total_faults       = 0
+            st.session_state.gs_history_loaded  = False
             st.rerun()
 
 
@@ -1269,11 +1670,13 @@ with tab_settings:
 
         col_r1, col_r2 = st.columns(2)
         with col_r1:
-            if st.button("🗑  Clear All History", width='stretch', key="clear_hist_settings"):
-                st.session_state.history      = []
-                st.session_state.total_scans  = 0
-                st.session_state.total_faults = 0
-                st.success("History cleared!")
+            if st.button("🗑  Clear All History", use_container_width=True, key="clear_hist_settings"):
+                gs_clear_history()
+                st.session_state.history            = []
+                st.session_state.total_scans        = 0
+                st.session_state.total_faults       = 0
+                st.session_state.gs_history_loaded  = False
+                st.success("History cleared from Google Sheets!")
         with col_r2:
             if st.button("🔄  Reset Counters", width='stretch', key="reset_counters"):
                 st.session_state.total_scans  = 0
