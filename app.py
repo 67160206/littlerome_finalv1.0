@@ -528,6 +528,34 @@ _gs_ok = _get_workbook() is not None
 # ───────────────────────────────────────────────────────────────
 # LOGIN SCREEN
 # ───────────────────────────────────────────────────────────────
+# Session token stored in query_params to survive refresh
+_TOKEN_KEY = "sid"
+
+def _make_token(username: str) -> str:
+    import time as _time
+    raw = f"{username}:{_time.time()}:{hash_pw(username)}"
+    return _hashlib.md5(raw.encode()).hexdigest()
+
+def _restore_session_from_token():
+    """Try to restore login from query_params token."""
+    try:
+        token = st.query_params.get(_TOKEN_KEY, "")
+        if not token:
+            return False
+        stored = st.session_state.get("_session_tokens", {})
+        if token in stored:
+            info = stored[token]
+            st.session_state.logged_in    = True
+            st.session_state.username     = info["username"]
+            st.session_state.display_name = info["display_name"]
+            st.session_state.role         = info["role"]
+            st.session_state.login_time   = info["login_time"]
+            st.session_state.activity_log = info.get("activity_log", [])
+            return True
+        return False
+    except Exception:
+        return False
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in      = False
     st.session_state.username       = ""
@@ -535,6 +563,10 @@ if "logged_in" not in st.session_state:
     st.session_state.role           = ""
     st.session_state.login_time     = None
     st.session_state.activity_log   = []
+
+# Try auto-restore from token on refresh
+if not st.session_state.logged_in:
+    _restore_session_from_token()
 
 if not st.session_state.logged_in:
     st.markdown("""
@@ -585,6 +617,18 @@ if not st.session_state.logged_in:
                         st.session_state.role         = _users[u_in]["role"]
                         st.session_state.login_time   = now_th()
                         st.session_state.activity_log = [{"ts": now_th().strftime("%H:%M:%S"), "user": u_in, "action": "🔑 Login", "detail": f"เข้าสู่ระบบ ({_users[u_in]['role']})"}]
+                        # Save token to query_params for refresh persistence
+                        _tok = _make_token(u_in)
+                        if "_session_tokens" not in st.session_state:
+                            st.session_state._session_tokens = {}
+                        st.session_state._session_tokens[_tok] = {
+                            "username":     u_in,
+                            "display_name": _users[u_in]["display_name"],
+                            "role":         _users[u_in]["role"],
+                            "login_time":   now_th(),
+                            "activity_log": st.session_state.activity_log,
+                        }
+                        st.query_params[_TOKEN_KEY] = _tok
                         st.rerun()
                     else:
                         st.error("❌ Username หรือ Password ไม่ถูกต้อง")
@@ -639,10 +683,12 @@ if not st.session_state.logged_in:
 # ───────────────────────────────────────────────────────────────
 # SESSION STATE
 # ───────────────────────────────────────────────────────────────
-# Load history from Google Sheets on first run of this session
+# Always load history from Google Sheets on first run of this session
+# (session_state clears on full refresh, so we always reload from Sheets)
 if "gs_history_loaded" not in st.session_state:
+    with st.spinner("⏳ กำลังโหลด History จาก Google Sheets..."):
+        _loaded = gs_load_history()
     st.session_state.gs_history_loaded = True
-    _loaded = gs_load_history()
     st.session_state.history      = _loaded
     st.session_state.total_scans  = len(_loaded)
     st.session_state.total_faults = sum(1 for h in _loaded if h.get("status") == "FAULT")
@@ -894,7 +940,8 @@ with _hdr_col:
     )
 with _logout_col:
     st.markdown('<div style="padding-top:8px">', unsafe_allow_html=True)
-    if st.button("🚪", key="logout_btn", help="Logout", use_container_width=True):
+    if st.button("🚪 Logout", key="logout_btn", use_container_width=True):
+        st.query_params.clear()
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
         st.rerun()
