@@ -886,7 +886,7 @@ with _hdr_col:
     )
 with _logout_col:
     st.markdown('<div style="padding-top:8px">', unsafe_allow_html=True)
-    if st.button("🚪", key="logout_btn", help="Logout", use_container_width=True):
+    if st.button("logout", key="logout_btn", help="Logout", use_container_width=True):
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
         st.rerun()
