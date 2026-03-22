@@ -528,31 +528,58 @@ _gs_ok = _get_workbook() is not None
 # ───────────────────────────────────────────────────────────────
 # LOGIN SCREEN
 # ───────────────────────────────────────────────────────────────
-# Session token stored in query_params to survive refresh
-_TOKEN_KEY = "sid"
+# Session token stored in query_params + /tmp file to survive refresh
+_TOKEN_KEY  = "sid"
+_TOKENS_FILE = "/tmp/lv_tokens.json"
 
 def _make_token(username: str) -> str:
     import time as _time
     raw = f"{username}:{_time.time()}:{hash_pw(username)}"
     return _hashlib.md5(raw.encode()).hexdigest()
 
+def _load_tokens() -> dict:
+    try:
+        with open(_TOKENS_FILE) as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+def _save_token(token: str, info: dict):
+    tokens = _load_tokens()
+    tokens[token] = {k: str(v) if hasattr(v, 'strftime') else v
+                     for k, v in info.items()}
+    try:
+        with open(_TOKENS_FILE, "w") as f:
+            _json.dump(tokens, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+
+def _delete_token(token: str):
+    tokens = _load_tokens()
+    tokens.pop(token, None)
+    try:
+        with open(_TOKENS_FILE, "w") as f:
+            _json.dump(tokens, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+
 def _restore_session_from_token():
-    """Try to restore login from query_params token."""
+    """Try to restore login from query_params token stored in /tmp."""
     try:
         token = st.query_params.get(_TOKEN_KEY, "")
         if not token:
             return False
-        stored = st.session_state.get("_session_tokens", {})
-        if token in stored:
-            info = stored[token]
-            st.session_state.logged_in    = True
-            st.session_state.username     = info["username"]
-            st.session_state.display_name = info["display_name"]
-            st.session_state.role         = info["role"]
-            st.session_state.login_time   = info["login_time"]
-            st.session_state.activity_log = info.get("activity_log", [])
-            return True
-        return False
+        tokens = _load_tokens()
+        if token not in tokens:
+            return False
+        info = tokens[token]
+        st.session_state.logged_in    = True
+        st.session_state.username     = info["username"]
+        st.session_state.display_name = info["display_name"]
+        st.session_state.role         = info["role"]
+        st.session_state.login_time   = now_th()
+        st.session_state.activity_log = info.get("activity_log", [])
+        return True
     except Exception:
         return False
 
@@ -617,17 +644,13 @@ if not st.session_state.logged_in:
                         st.session_state.role         = _users[u_in]["role"]
                         st.session_state.login_time   = now_th()
                         st.session_state.activity_log = [{"ts": now_th().strftime("%H:%M:%S"), "user": u_in, "action": "🔑 Login", "detail": f"เข้าสู่ระบบ ({_users[u_in]['role']})"}]
-                        # Save token to query_params for refresh persistence
+                        # Save token to /tmp + query_params for refresh persistence
                         _tok = _make_token(u_in)
-                        if "_session_tokens" not in st.session_state:
-                            st.session_state._session_tokens = {}
-                        st.session_state._session_tokens[_tok] = {
+                        _save_token(_tok, {
                             "username":     u_in,
                             "display_name": _users[u_in]["display_name"],
                             "role":         _users[u_in]["role"],
-                            "login_time":   now_th(),
-                            "activity_log": st.session_state.activity_log,
-                        }
+                        })
                         st.query_params[_TOKEN_KEY] = _tok
                         st.rerun()
                     else:
@@ -941,6 +964,9 @@ with _hdr_col:
 with _logout_col:
     st.markdown('<div style="padding-top:8px">', unsafe_allow_html=True)
     if st.button("🚪 Logout", key="logout_btn", use_container_width=True):
+        _cur_tok = st.query_params.get(_TOKEN_KEY, "")
+        if _cur_tok:
+            _delete_token(_cur_tok)
         st.query_params.clear()
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
