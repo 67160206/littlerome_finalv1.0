@@ -387,6 +387,14 @@ def gs_load_history() -> list:
                 dets = _json.loads(dets_raw) if dets_raw else []
             except Exception:
                 dets = []
+            # Re-add fault flag to detections loaded from Sheets
+            for d in dets:
+                if "fault" not in d:
+                    d["fault"] = is_fault(d.get("class", ""))
+                if "color" not in d:
+                    d["color"] = class_color(d.get("class", ""))
+                if "emoji" not in d:
+                    d["emoji"] = class_emoji(d.get("class", ""))
             result.append({
                 "ts":         r.get("Timestamp", ""),
                 "user":       r.get("User", ""),
@@ -830,7 +838,7 @@ def save_to_history(source: str, img_pil: Image.Image | None, detections: list):
     if img_pil:
         thumb = img_pil.copy()
         thumb.thumbnail((120, 90))
-    has_fault = any(d["fault"] for d in detections)
+    has_fault = any(d.get("fault", False) for d in detections)
     entry = {
         "ts":         now_th().strftime("%Y-%m-%d %H:%M:%S"),
         "user":       st.session_state.get("username", "—"),
@@ -886,7 +894,7 @@ with _hdr_col:
     )
 with _logout_col:
     st.markdown('<div style="padding-top:8px">', unsafe_allow_html=True)
-    if st.button("logout", key="logout_btn", help="Logout", use_container_width=True):
+    if st.button("🚪", key="logout_btn", help="Logout", use_container_width=True):
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
         st.rerun()
@@ -910,7 +918,7 @@ with tab_dash:
 
     all_dets   = [d for h in st.session_state.history for d in h.get("detections", [])]
     avg_conf   = round(sum(d["confidence"] for d in all_dets) / len(all_dets), 1) if all_dets else 0
-    defect_cnt = Counter(d["class"] for d in all_dets if d["fault"])
+    defect_cnt = Counter(d["class"] for d in all_dets if d.get("fault", False))
 
     # KPI row
     st.markdown(
@@ -1151,10 +1159,10 @@ with tab_cam:
                 annotated, detections = run_inference(img_pil, conf=st.session_state.conf_threshold)
 
             result_placeholder.image(annotated, use_container_width=True, caption="Detection Result")
-            has_fault = any(d["fault"] for d in detections)
+            has_fault = any(d.get("fault", False) for d in detections)
 
             if has_fault and st.session_state.alert_enabled:
-                fault_names = ", ".join(d["class"] for d in detections if d["fault"])
+                fault_names = ", ".join(d["class"] for d in detections if d.get("fault", False))
                 st.markdown(
                     f'<div class="alert-box"><div class="alert-icon">🚨</div>'
                     f'<div><div style="font-weight:800;font-size:16px;color:var(--red)">FAULT DETECTED</div>'
@@ -1296,7 +1304,7 @@ with tab_img:
 
             st.image(annotated, width='stretch')
 
-            has_fault = any(d["fault"] for d in detections)
+            has_fault = any(d.get("fault", False) for d in detections)
             status_badge = (
                 '<span class="badge badge-fault">⚠️ FAULT</span>'
                 if has_fault
@@ -1424,7 +1432,7 @@ with tab_vid:
                         "frame_idx":   int(frame_idx),
                         "time_sec":    round(frame_idx / max(cap.get(cv2.CAP_PROP_FPS), 1), 1),
                         "detections":  dets,
-                        "has_fault":   any(d["fault"] for d in dets),
+                        "has_fault":   any(d.get("fault", False) for d in dets),
                     }
                 )
                 all_vid_dets.extend(dets)
@@ -1438,7 +1446,7 @@ with tab_vid:
             # Summary
             fault_frames = [r for r in frame_results if r["has_fault"]]
             ok_frames    = [r for r in frame_results if not r["has_fault"]]
-            vid_defects  = Counter(d["class"] for d in all_vid_dets if d["fault"])
+            vid_defects  = Counter(d["class"] for d in all_vid_dets if d.get("fault", False))
             pass_rate_v  = round(len(ok_frames) / len(frame_results) * 100) if frame_results else 100
 
             st.markdown(
