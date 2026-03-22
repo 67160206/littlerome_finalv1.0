@@ -849,33 +849,48 @@ def save_to_history(source: str, img_pil: Image.Image | None, detections: list):
 # ───────────────────────────────────────────────────────────────
 # HEADER
 # ───────────────────────────────────────────────────────────────
-now_str = datetime.datetime.now().strftime("%H:%M:%S · %d %b %Y")
+now_str  = now_th().strftime("%H:%M:%S · %d %b %Y")
 _active_model_label = f"{len(_ensemble)}/6 models"
-st.markdown(
-    f"""
+_uname    = st.session_state.get("display_name", "User")
+_role     = st.session_state.get("role", "")
+_initials = "".join(w[0].upper() for w in _uname.split()[:2]) or "OP"
+_gs_color = "var(--green)" if _gs_ok else "var(--red)"
+_gs_label = "🟢 Google Sheets" if _gs_ok else "🔴 Sheets offline"
+
+_hdr_col, _logout_col = st.columns([11, 1])
+with _hdr_col:
+    st.markdown(
+        f"""
 <div class="lv-header">
   <div style="display:flex;align-items:center;gap:20px">
     <div class="lv-logo">
       <div class="lv-logo-icon">👁</div>
       Littlerome<span style="color:#2188ff">AI</span>&nbsp;Vision
     </div>
-    <div class="lv-conn">
-      <div class="lv-dot"></div> CONNECTED
-    </div>
-    <div style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;color:{"var(--green)" if _gs_ok else "var(--red)"}">{"🟢 Google Sheets" if _gs_ok else "🔴 Sheets offline"}</div>
+    <div class="lv-conn"><div class="lv-dot"></div> CONNECTED</div>
+    <div style="font-family:var(--mono);font-size:11px;color:{_gs_color}">{_gs_label}</div>
   </div>
   <div style="display:flex;align-items:center;gap:12px">
     <span class="lv-time">{now_str}</span>
     <span style="font-family:var(--mono);font-size:11px;color:var(--blue);
       background:rgba(33,136,255,.12);padding:3px 10px;border-radius:20px;
       border:1px solid rgba(33,136,255,.3)">🧠 {_active_model_label}</span>
-    <span class="lv-ver">v1.0.0</span>
-    <div class="lv-avatar">OP</div>
+    <span style="font-size:13px;color:var(--text2)">👤 {_uname}
+      <span style="font-size:11px;color:var(--text3);font-family:var(--mono)">[{_role}]</span>
+    </span>
+    <div class="lv-avatar">{_initials}</div>
   </div>
 </div>
 """,
-    unsafe_allow_html=True,
-)
+        unsafe_allow_html=True,
+    )
+with _logout_col:
+    st.markdown('<div style="padding-top:8px">', unsafe_allow_html=True)
+    if st.button("🚪", key="logout_btn", help="Logout", use_container_width=True):
+        for _k in list(st.session_state.keys()):
+            del st.session_state[_k]
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ───────────────────────────────────────────────────────────────
 # MAIN TABS
