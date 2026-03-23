@@ -1178,9 +1178,11 @@ with tab_dash:
                 else '<span class="badge badge-ok">OK</span>'
             )
             det_names = ", ".join(d["class"] for d in h["detections"][:3]) or "—"
+            uname = h.get("user", "—")
             rows_html += f"""
 <div class="hist-row">
   <span style="font-family:var(--mono);font-size:11px;color:var(--text3);min-width:140px">{h['ts']}</span>
+  <span class="badge badge-info" style="font-size:11px">👤 {uname}</span>
   <span class="badge badge-idle">{h['source']}</span>
   {s_badge}
   <span style="font-size:12px;color:var(--text2);flex:1;padding-left:8px">{det_names}</span>
@@ -1690,7 +1692,7 @@ with tab_hist:
 </style>
 <table class="hist-table">
 <thead><tr>
-  <th>Timestamp</th><th>Source</th><th>Status</th>
+  <th>Timestamp</th><th>User</th><th>Source</th><th>Status</th>
   <th>Detections</th><th>Avg Conf</th>
 </tr></thead><tbody>
 """
@@ -1702,9 +1704,11 @@ with tab_hist:
                 if h["detections"] else 0
             )
             s_class = "st-fault" if h["status"] == "FAULT" else "st-ok"
+            uname   = h.get("user", "—")
             rows_html += (
                 f"<tr>"
                 f"<td>{h['ts']}</td>"
+                f"<td><span class='badge badge-info'>👤 {uname}</span></td>"
                 f"<td><span class='badge badge-idle'>{h['source']}</span></td>"
                 f"<td><span class='{s_class}'>{h['status']}</span></td>"
                 f"<td>{det_str}</td>"
@@ -1713,6 +1717,7 @@ with tab_hist:
             )
             csv_rows.append({
                 "Timestamp":  h["ts"],
+                "User":       uname,
                 "Source":     h["source"],
                 "Status":     h["status"],
                 "Detections": det_str,
@@ -1852,6 +1857,30 @@ with tab_settings:
 """,
             unsafe_allow_html=True,
         )
+
+        # ── Change Password ──
+        with st.container(border=True):
+            st.markdown(f'<div class="card-title">🔑 เปลี่ยน Password</div>', unsafe_allow_html=True)
+            _cur_user = st.session_state.get("username", "")
+            _old_pw  = st.text_input("Password เดิม", type="password", key="chpw_old")
+            _new_pw  = st.text_input("Password ใหม่", type="password", key="chpw_new")
+            _new_pw2 = st.text_input("ยืนยัน Password ใหม่", type="password", key="chpw_new2")
+            if st.button("บันทึก Password ใหม่", type="primary", use_container_width=True, key="chpw_save"):
+                _users_now = gs_load_users()
+                if not _old_pw or not _new_pw:
+                    st.error("❌ กรอกข้อมูลให้ครบ")
+                elif not verify_pw(_old_pw, _users_now.get(_cur_user, {}).get("password", "")):
+                    st.error("❌ Password เดิมไม่ถูกต้อง")
+                elif len(_new_pw) < 6:
+                    st.error("❌ ต้องมีอย่างน้อย 6 ตัวอักษร")
+                elif _new_pw != _new_pw2:
+                    st.error("❌ Password ใหม่ไม่ตรงกัน")
+                else:
+                    _u = _users_now.get(_cur_user, {})
+                    if gs_save_user(_cur_user, hash_pw(_new_pw), _u.get("display_name",""), _u.get("role","")):
+                        st.success("✅ เปลี่ยน Password สำเร็จ!")
+                    else:
+                        st.error("❌ บันทึกไม่ได้")
 
         st.markdown(
             """<div class="card" style="margin-top:16px">
