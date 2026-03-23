@@ -387,14 +387,6 @@ def gs_load_history() -> list:
                 dets = _json.loads(dets_raw) if dets_raw else []
             except Exception:
                 dets = []
-            # Re-add fault flag to detections loaded from Sheets
-            for d in dets:
-                if "fault" not in d:
-                    d["fault"] = is_fault(d.get("class", ""))
-                if "color" not in d:
-                    d["color"] = class_color(d.get("class", ""))
-                if "emoji" not in d:
-                    d["emoji"] = class_emoji(d.get("class", ""))
             result.append({
                 "ts":         r.get("Timestamp", ""),
                 "user":       r.get("User", ""),
@@ -704,13 +696,52 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ───────────────────────────────────────────────────────────────
-# SESSION STATE
+# SESSION STATE — history cached in /tmp keyed by session token
 # ───────────────────────────────────────────────────────────────
-# Always load history from Google Sheets on first run of this session
-# (session_state clears on full refresh, so we always reload from Sheets)
+def _history_cache_file(token: str) -> str:
+    return f"/tmp/lv_hist_{token[:12]}.json"
+
+def _save_history_cache(token: str, history: list):
+    """Save history to /tmp for fast reload on refresh."""
+    try:
+        safe = [{k: v for k, v in h.items() if k != "thumbnail"} for h in history]
+        with open(_history_cache_file(token), "w") as f:
+            _json.dump(safe, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+
+def _load_history_cache(token: str):
+    """Load history from /tmp cache if available."""
+    try:
+        with open(_history_cache_file(token)) as f:
+            return _json.load(f)
+    except Exception:
+        return None
+
+def _restore_det_fields(history: list):
+    """Re-add fault/color/emoji after loading from cache or Sheets."""
+    for h in history:
+        for d in h.get("detections", []):
+            if "fault" not in d:
+                d["fault"] = is_fault(d.get("class", ""))
+            if "color" not in d:
+                d["color"] = class_color(d.get("class", ""))
+            if "emoji" not in d:
+                d["emoji"] = class_emoji(d.get("class", ""))
+
 if "gs_history_loaded" not in st.session_state:
-    with st.spinner("⏳ กำลังโหลด History จาก Google Sheets..."):
-        _loaded = gs_load_history()
+    _cur_token = st.query_params.get(_TOKEN_KEY, "")
+    # Try /tmp cache first (fast, survives refresh)
+    _cached = _load_history_cache(_cur_token) if _cur_token else None
+    if _cached is not None:
+        _loaded = _cached
+    else:
+        # Fall back to Google Sheets
+        with st.spinner("⏳ กำลังโหลด History จาก Google Sheets..."):
+            _loaded = gs_load_history()
+        # Cache to /tmp for next refresh
+        if _cur_token:
+            _save_history_cache(_cur_token, _loaded)
     st.session_state.gs_history_loaded = True
     st.session_state.history      = _loaded
     st.session_state.total_scans  = len(_loaded)
@@ -729,6 +760,8 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Restore fault/color/emoji fields (needs class_color etc defined below)
 
 # ───────────────────────────────────────────────────────────────
 # CONSTANTS — class colours (keyword-match approach)
@@ -776,6 +809,10 @@ def class_emoji(name: str) -> str:
 def is_fault(name: str) -> bool:
     nl = name.lower()
     return not ("legit" in nl)
+
+# Restore detection fields now that helper functions are defined
+if st.session_state.get("history"):
+    _restore_det_fields(st.session_state.history)
 
 # ───────────────────────────────────────────────────────────────
 # ENSEMBLE — 6 dedicated models, one per class
@@ -920,8 +957,12 @@ def save_to_history(source: str, img_pil: Image.Image | None, detections: list):
     st.session_state.total_scans += 1
     if has_fault:
         st.session_state.total_faults += 1
-    # Write to Google Sheets (background, non-blocking)
+    # Write to Google Sheets
     gs_append_history(entry)
+    # Update /tmp cache
+    _tok = st.query_params.get(_TOKEN_KEY, "")
+    if _tok:
+        _save_history_cache(_tok, st.session_state.history)
 
 # ───────────────────────────────────────────────────────────────
 # HEADER
@@ -1600,6 +1641,13 @@ with tab_hist:
     with col_hb:
         if st.button("🗑  Clear History", key="clear_hist", use_container_width=True):
             gs_clear_history()
+            _tok = st.query_params.get(_TOKEN_KEY, "")
+            if _tok:
+                try:
+                    import os as _os
+                    _os.unlink(_history_cache_file(_tok))
+                except Exception:
+                    pass
             st.session_state.history            = []
             st.session_state.total_scans        = 0
             st.session_state.total_faults       = 0
