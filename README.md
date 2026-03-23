@@ -104,28 +104,19 @@ Google Sheets จะมี 2 sheet อัตโนมัติ:
 
 ---
 
-## 👥 ระบบผู้ใช้
-
-### Default Accounts
-| Username | Password | Role |
-|----------|----------|------|
-| `admin` | `admin1234` | admin |
-| `operator` | `op1234` | operator |
-| `viewer` | `view1234` | viewer |
-
 > ⚠️ **เปลี่ยน password ทันทีหลัง deploy**
 
 ### Roles
 | Role | สิทธิ์ |
 |------|-------|
 | `admin` | ทำได้ทุกอย่าง + จัดการ user |
-| `operator` | ใช้งาน detect ได้ทุก feature |
+| `user` | ใช้งาน detect ได้ทุก feature |
 | `viewer` | ดูได้อย่างเดียว |
 
 ### สมัครสมาชิก
 - ต้องมี **Invite Code** จาก Admin
 - ตั้ง Invite Code ได้ใน Secrets: `invite_code = "..."`
-- Default invite code: `LITTLEROME2025`
+- Default invite code: `lt5600`
 
 ---
 
