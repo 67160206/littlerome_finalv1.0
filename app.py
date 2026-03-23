@@ -439,7 +439,7 @@ def gs_clear_history():
 # ── Users helpers ────────────────────────────────────────────────
 _DEFAULT_USERS = {
     "admin":    {"password": _hashlib.sha256("admin1234".encode()).hexdigest(), "display_name": "Administrator", "role": "admin"},
-    "operator": {"password": _hashlib.sha256("op1234".encode()).hexdigest(),    "display_name": "Operator",      "role": "operator"},
+    "operator": {"password": _hashlib.sha256("op1234".encode()).hexdigest(),    "display_name": "Operator",      "role": "user"},
     "viewer":   {"password": _hashlib.sha256("view1234".encode()).hexdigest(),  "display_name": "Viewer",        "role": "viewer"},
 }
 
@@ -695,7 +695,7 @@ if not st.session_state.logged_in:
                     elif reg_uname in _users:
                         st.error(f"❌ Username '{reg_uname}' มีอยู่แล้ว")
                     else:
-                        ok = gs_save_user(reg_uname, hash_pw(reg_pw), reg_dname, "operator")
+                        ok = gs_save_user(reg_uname, hash_pw(reg_pw), reg_dname, "user")
                         if ok:
                             st.success(f"✅ สมัครสมาชิกสำเร็จ! เข้าสู่ระบบได้เลย @{reg_uname}")
                             st.session_state.auth_tab = "login"
@@ -705,7 +705,7 @@ if not st.session_state.logged_in:
 
                 st.markdown(
                     '<div style="font-size:11px;color:var(--text3);margin-top:8px">'
-                    'ℹ️ ต้องมี Invite Code จาก Admin · Role เริ่มต้น: <b>operator</b></div>',
+                    'ℹ️ ต้องมี Invite Code จาก Admin · Role เริ่มต้น: <b>user</b></div>',
                     unsafe_allow_html=True,
                 )
     st.stop()
@@ -1882,6 +1882,33 @@ with tab_settings:
                     else:
                         st.error("❌ บันทึกไม่ได้")
 
+        # ── Delete My Account (ทุก role) ──
+        with st.container(border=True):
+            st.markdown('<div class="card-title">🗑 ลบบัญชีของฉัน</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div style="font-size:13px;color:var(--text2);margin-bottom:12px">'
+                'เมื่อลบแล้วจะไม่สามารถกู้คืนได้ — ต้องยืนยันด้วย Password</div>',
+                unsafe_allow_html=True,
+            )
+            _del_pw = st.text_input("ยืนยัน Password", type="password", key="del_acc_pw")
+            if st.button("ลบบัญชีของฉัน", type="secondary", use_container_width=True, key="del_acc_btn"):
+                _users_now = gs_load_users()
+                _cur = st.session_state.get("username", "")
+                if not _del_pw:
+                    st.error("❌ กรุณากรอก Password เพื่อยืนยัน")
+                elif not verify_pw(_del_pw, _users_now.get(_cur, {}).get("password", "")):
+                    st.error("❌ Password ไม่ถูกต้อง")
+                else:
+                    gs_delete_user(_cur)
+                    # Logout
+                    _tok = st.query_params.get(_TOKEN_KEY, "")
+                    if _tok:
+                        _delete_session_token(_tok)
+                    st.query_params.clear()
+                    for _k in list(st.session_state.keys()):
+                        del st.session_state[_k]
+                    st.rerun()
+
         st.markdown(
             """<div class="card" style="margin-top:16px">
 <div class="card-title">👁 About</div>
@@ -1892,3 +1919,54 @@ with tab_settings:
 </div>""",
             unsafe_allow_html=True,
         )
+
+    # ── USER MANAGEMENT (admin only, full width) ──
+    if st.session_state.get("role") == "admin":
+        st.markdown("---")
+        st.markdown('<div style="font-size:18px;font-weight:800;margin-bottom:16px">👥 จัดการบัญชีผู้ใช้</div>', unsafe_allow_html=True)
+
+        _all_users = gs_load_users()
+        _cur_admin = st.session_state.get("username", "")
+        _role_color = {"admin": "var(--red)", "user": "var(--blue)", "viewer": "var(--green)"}
+
+        with st.container(border=True):
+            st.markdown('<div class="card-title">📋 รายชื่อผู้ใช้ทั้งหมด</div>', unsafe_allow_html=True)
+            for uname, udata in _all_users.items():
+                c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+                with c1:
+                    st.markdown(
+                        f'<div style="padding:6px 0">'
+                        f'<b style="font-size:14px">{udata["display_name"]}</b><br>'
+                        f'<span style="font-size:12px;color:var(--text3);font-family:var(--mono)">@{uname}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                with c2:
+                    _rc = _role_color.get(udata["role"], "var(--text2)")
+                    st.markdown(
+                        f'<div style="padding:10px 0"><span style="color:{_rc};font-weight:700;font-size:13px">{udata["role"]}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                with c3:
+                    # Role selector (admin only, cannot change self)
+                    if uname != _cur_admin:
+                        _new_role = st.selectbox(
+                            "เปลี่ยน role",
+                            ["user", "viewer", "admin"],
+                            index=["user", "viewer", "admin"].index(udata["role"]) if udata["role"] in ["user", "viewer", "admin"] else 0,
+                            key=f"role_sel_{uname}",
+                            label_visibility="collapsed",
+                        )
+                        if _new_role != udata["role"]:
+                            if st.button("บันทึก", key=f"role_save_{uname}", use_container_width=True):
+                                if gs_save_user(uname, udata["password"], udata["display_name"], _new_role):
+                                    st.success(f"✅ เปลี่ยน role @{uname} → {_new_role}")
+                                    st.rerun()
+                    else:
+                        st.markdown('<div style="padding:10px 0;font-size:12px;color:var(--text3)">ตัวเอง</div>', unsafe_allow_html=True)
+                with c4:
+                    if uname != _cur_admin:
+                        if st.button("🗑", key=f"del_{uname}", help=f"ลบ @{uname}", use_container_width=True):
+                            gs_delete_user(uname)
+                            st.success(f"ลบ @{uname} แล้ว")
+                            st.rerun()
+                st.divider()
