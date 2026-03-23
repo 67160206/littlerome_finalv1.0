@@ -520,57 +520,76 @@ _gs_ok = _get_workbook() is not None
 # ───────────────────────────────────────────────────────────────
 # LOGIN SCREEN
 # ───────────────────────────────────────────────────────────────
-# Session token stored in query_params + /tmp file to survive refresh
-_TOKEN_KEY  = "sid"
-_TOKENS_FILE = "/tmp/lv_tokens.json"
+# Session persistence via Google Sheets "Sessions" sheet
+_TOKEN_KEY = "sid"
 
 def _make_token(username: str) -> str:
     import time as _time
     raw = f"{username}:{_time.time()}:{hash_pw(username)}"
     return _hashlib.md5(raw.encode()).hexdigest()
 
-def _load_tokens() -> dict:
+def _save_session_token(token: str, username: str, display_name: str, role: str):
+    """Save session token to Google Sheets Sessions sheet."""
+    ws = _get_or_create_sheet("Sessions", ["Token", "Username", "DisplayName", "Role", "LoginTime"])
+    if ws is None:
+        return
     try:
-        with open(_TOKENS_FILE) as f:
-            return _json.load(f)
-    except Exception:
-        return {}
-
-def _save_token(token: str, info: dict):
-    tokens = _load_tokens()
-    tokens[token] = {k: str(v) if hasattr(v, 'strftime') else v
-                     for k, v in info.items()}
-    try:
-        with open(_TOKENS_FILE, "w") as f:
-            _json.dump(tokens, f, ensure_ascii=False, default=str)
+        # Remove old tokens for same user first
+        rows = ws.get_all_values()
+        to_delete = [i+1 for i, r in enumerate(rows[1:], 1) if len(r) > 1 and r[1] == username]
+        for idx in reversed(to_delete):
+            ws.delete_rows(idx + 1)
+        ws.append_row([token, username, display_name, role, now_th().strftime("%Y-%m-%d %H:%M:%S")])
     except Exception:
         pass
 
-def _delete_token(token: str):
-    tokens = _load_tokens()
-    tokens.pop(token, None)
+def _load_session_token(token: str) -> dict:
+    """Load session info from Google Sheets by token."""
+    ws = _get_or_create_sheet("Sessions", ["Token", "Username", "DisplayName", "Role", "LoginTime"])
+    if ws is None:
+        return {}
     try:
-        with open(_TOKENS_FILE, "w") as f:
-            _json.dump(tokens, f, ensure_ascii=False, default=str)
+        rows = ws.get_all_records()
+        for r in rows:
+            if r.get("Token") == token:
+                return {
+                    "username":     r.get("Username", ""),
+                    "display_name": r.get("DisplayName", ""),
+                    "role":         r.get("Role", ""),
+                }
+        return {}
+    except Exception:
+        return {}
+
+def _delete_session_token(token: str):
+    """Delete session token from Google Sheets."""
+    ws = _get_or_create_sheet("Sessions", ["Token", "Username", "DisplayName", "Role", "LoginTime"])
+    if ws is None:
+        return
+    try:
+        rows = ws.get_all_values()
+        for i, r in enumerate(rows[1:], 2):
+            if r and r[0] == token:
+                ws.delete_rows(i)
+                return
     except Exception:
         pass
 
 def _restore_session_from_token():
-    """Try to restore login from query_params token stored in /tmp."""
+    """Restore login session from URL token via Google Sheets."""
     try:
         token = st.query_params.get(_TOKEN_KEY, "")
         if not token:
             return False
-        tokens = _load_tokens()
-        if token not in tokens:
+        info = _load_session_token(token)
+        if not info or not info.get("username"):
             return False
-        info = tokens[token]
         st.session_state.logged_in    = True
         st.session_state.username     = info["username"]
         st.session_state.display_name = info["display_name"]
         st.session_state.role         = info["role"]
         st.session_state.login_time   = now_th()
-        st.session_state.activity_log = info.get("activity_log", [])
+        st.session_state.activity_log = []
         return True
     except Exception:
         return False
@@ -636,13 +655,9 @@ if not st.session_state.logged_in:
                         st.session_state.role         = _users[u_in]["role"]
                         st.session_state.login_time   = now_th()
                         st.session_state.activity_log = [{"ts": now_th().strftime("%H:%M:%S"), "user": u_in, "action": "🔑 Login", "detail": f"เข้าสู่ระบบ ({_users[u_in]['role']})"}]
-                        # Save token to /tmp + query_params for refresh persistence
+                        # Save session token to Google Sheets
                         _tok = _make_token(u_in)
-                        _save_token(_tok, {
-                            "username":     u_in,
-                            "display_name": _users[u_in]["display_name"],
-                            "role":         _users[u_in]["role"],
-                        })
+                        _save_session_token(_tok, u_in, _users[u_in]["display_name"], _users[u_in]["role"])
                         st.query_params[_TOKEN_KEY] = _tok
                         st.rerun()
                     else:
@@ -1007,7 +1022,7 @@ with _logout_col:
     if st.button("🚪 Logout", key="logout_btn", use_container_width=True):
         _cur_tok = st.query_params.get(_TOKEN_KEY, "")
         if _cur_tok:
-            _delete_token(_cur_tok)
+            _delete_session_token(_cur_tok)
         st.query_params.clear()
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
