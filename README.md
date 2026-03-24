@@ -23,7 +23,12 @@
 ```
 littlerome/
 ├── app.py                          ← Streamlit app หลัก
-├── best.pt                         ← YOLOv11 model weights (ทุก class รวมกัน)
+├── Corrosion_Best_Model.pt         ← YOLOv11 model
+├── PipeCrack.pt                    ← YOLOv11 model
+├── Pipeline_Legit_Best_Model.pt    ← YOLOv11 model
+├── water_leak_best.pt              ← YOLOv11 model
+├── Flame_Best_Model.pt             ← YOLOv11 model      
+├── Rust.pt                         ← YOLOv11 model
 ├── requirements.txt                ← Python dependencies
 ├── packages.txt                    ← System dependencies (Streamlit Cloud)
 ├── README.md
@@ -37,7 +42,7 @@ littlerome/
 
 ### 1. Push ไฟล์ขึ้น GitHub
 ```bash
-git add app.py best.pt requirements.txt packages.txt README.md
+git add app.py Flame_Best_Model.pt water_leak_best.pt Pipeline_Legit_Best_Model.pt PipeCrack.pt Corrosion_Best_Model.pt Rust.pt requirements.txt packages.txt README.md
 git add .streamlit/config.toml
 git commit -m "init: Littlerome AI Vision"
 git branch -M main
